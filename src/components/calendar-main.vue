@@ -4,16 +4,31 @@
     <PaydayPopup ref="paydayPopup" @set-payday="setPayday" />
     <div class="calendar">
       <div class="day-header" v-for="day in weekDays" :key="day">{{ day }}</div>
-      <div v-for="(day, index) in daysInMonth" :key="index" class="day" :class="{ 'prev-month': day.isPrev, 'next-month': day.isNext, 'current-day': isCurrentDay(day.fullDate) }">
+      <div
+        v-for="(day, index) in visibleDays"
+        :key="index"
+        class="day"
+        :class="[
+          'day',
+          { 'current-day': isCurrentDay(day.fullDate) },
+          { 'dark-month': isDarkMonth(day.fullDate) },
+          { 'light-month': isLightMonth(day.fullDate) }
+        ]"
+      >
         <div v-if="day.date" class="d-flex justify-content-between align-items-start">
           <span class="day-number">{{ day.date }}</span>
-          <button class="btn btn-sm btn-success" @click="showEventPopup(day.date, day.isPrev, day.isNext)">+</button>
+          <button class="btn btn-sm btn-success" @click="showEventPopup(day.fullDate)">+</button>
         </div>
         <div v-if="isPayday(day.fullDate)" class="payday d-flex justify-content-between align-items-center">
           <div><small>Payday</small></div>
           <div><small>{{ formatCurrency(payday.amount) }}</small></div>
         </div>
-        <div v-for="event in day.events" :key="event.id" class="event d-flex justify-content-between align-items-center" :class="{ 'paid': event.paid }">
+        <div
+          v-for="event in day.events"
+          :key="event.id"
+          class="event d-flex justify-content-between align-items-center"
+          :class="{ 'paid': event.paid }"
+        >
           <div><small>{{ event.name }}</small></div>
           <div><small>{{ formatCurrency(event.amount) }}</small></div>
           <div>
@@ -31,7 +46,7 @@ import EventPopup from './EventPopup.vue';
 import PaydayPopup from './PaydayPopup.vue';
 
 export default {
-  props: ['currentMonth', 'currentYear'],
+  props: ['currentWeekStart'],
   components: { EventPopup, PaydayPopup },
   data() {
     return {
@@ -39,117 +54,65 @@ export default {
       events: JSON.parse(localStorage.getItem('events') || '{}'),
       payday: JSON.parse(localStorage.getItem('payday') || 'null'),
       selectedDate: null,
-      selectedPrev: false,
-      selectedNext: false,
-      today: new Date()
+      today: new Date(),
+      totalIn: 0,
+      totalOut: 0,
+      netTotal: 0
     };
   },
   mounted() {
     if (!this.payday) {
       this.$refs.paydayPopup.show();
     }
-    this.updateTotals();
+    this.updateEvents();
   },
   computed: {
-    daysInMonth() {
+    visibleDays() {
       const days = [];
-      const firstDayOfMonth = new Date(this.currentYear, this.currentMonth, 1).getDay();
-      const numberOfDays = new Date(this.currentYear, this.currentMonth + 1, 0).getDate();
-      const prevMonthDays = new Date(this.currentYear, this.currentMonth, 0).getDate();
+      const start = new Date(this.currentWeekStart);
+      const dayOffset = start.getDay();
 
-      // Days from previous month
-      for (let i = firstDayOfMonth - 1; i >= 0; i--) {
-        days.push({ date: prevMonthDays - i, fullDate: new Date(this.currentYear, this.currentMonth - 1, prevMonthDays - i), events: this.getEventsForDate(new Date(this.currentYear, this.currentMonth - 1, prevMonthDays - i)), isPrev: true, isNext: false });
-      }
+      // Include 2 weeks before and 3 weeks after the current week to center it in the view
+      const startDate = new Date(start);
+      startDate.setDate(startDate.getDate() - (dayOffset + 14)); // 14 days (2 weeks) before the current week
 
-      // Days from current month
-      for (let i = 1; i <= numberOfDays; i++) {
-        days.push({ date: i, fullDate: new Date(this.currentYear, this.currentMonth, i), events: this.getEventsForDate(new Date(this.currentYear, this.currentMonth, i)), isPrev: false, isNext: false });
-      }
-
-      // Days from next month
-      const nextDays = 42 - days.length; // To fill 6 weeks
-      for (let i = 1; i <= nextDays; i++) {
-        days.push({ date: i, fullDate: new Date(this.currentYear, this.currentMonth + 1, i), events: this.getEventsForDate(new Date(this.currentYear, this.currentMonth + 1, i)), isPrev: false, isNext: true });
+      for (let i = 0; i < 42; i++) { // 42 days to display 6 weeks
+        const date = new Date(startDate);
+        date.setDate(startDate.getDate() + i);
+        days.push({
+          date: date.getDate(),
+          fullDate: date,
+          events: this.getEventsForDate(date)
+        });
       }
 
       return days;
-    },
-    totalIn() {
-      let total = 0;
-      if (this.payday) {
-        const paydayDate = new Date(this.payday.date);
-        const firstDayOfMonth = new Date(this.currentYear, this.currentMonth, 1);
-        const lastDayOfMonth = new Date(this.currentYear, this.currentMonth + 1, 0);
-
-        // Start from the closest payday before or at the beginning of the month
-        let nextPayday = new Date(paydayDate);
-        while (nextPayday < firstDayOfMonth) {
-          nextPayday.setDate(nextPayday.getDate() + 14);
-        }
-        // Adjust to the previous payday if necessary
-        nextPayday.setDate(nextPayday.getDate() - 14);
-
-        // Iterate through the month to add paydays
-        while (nextPayday <= lastDayOfMonth) {
-          if (nextPayday >= firstDayOfMonth) {
-            total += this.payday.amount;
-          }
-          nextPayday.setDate(nextPayday.getDate() + 14);
-        }
-      }
-      return total;
-    },
-    totalOut() {
-      let total = 0;
-      const numberOfDays = new Date(this.currentYear, this.currentMonth + 1, 0).getDate();
-      for (let i = 1; i <= numberOfDays; i++) {
-        const date = `${this.currentYear}-${this.currentMonth + 1}-${i}`;
-        if (this.events[date]) {
-          this.events[date].forEach(event => {
-            total += event.amount;
-          });
-        }
-      }
-      return total;
-    },
-    netTotal() {
-      return this.totalIn - this.totalOut;
     }
   },
   methods: {
-    showEventPopup(day, isPrev, isNext) {
-      this.selectedDate = day;
-      this.selectedPrev = isPrev;
-      this.selectedNext = isNext;
+    showEventPopup(date) {
+      this.selectedDate = date;
       this.$refs.eventPopup.show();
     },
     addEvent(event) {
       const id = Date.now();
       const newEvent = { id, name: event.name, amount: event.amount, repeat: event.repeat, paid: false };
-      this.addEventToDate(newEvent, this.selectedDate, this.selectedPrev, this.selectedNext);
+      this.addEventToDate(newEvent, this.selectedDate);
       if (event.repeat) {
         this.addRepeatingEvent(newEvent);
       }
       this.saveEvents();
-      this.updateTotals();
+      this.updateEvents();
     },
-    addEventToDate(event, day, isPrev, isNext) {
-      let date;
-      if (isPrev) {
-        date = `${this.currentYear}-${this.currentMonth}-${day}`;
-      } else if (isNext) {
-        date = `${this.currentYear}-${this.currentMonth + 2}-${day}`;
-      } else {
-        date = `${this.currentYear}-${this.currentMonth + 1}-${day}`;
+    addEventToDate(event, date) {
+      const dateString = `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+      if (!this.events[dateString]) {
+        this.events[dateString] = [];
       }
-      if (!this.events[date]) {
-        this.events[date] = [];
-      }
-      this.events[date].push(event);
+      this.events[dateString].push(event);
     },
     addRepeatingEvent(event) {
-      const originalDate = new Date(this.currentYear, this.currentMonth, this.selectedDate);
+      const originalDate = new Date(this.selectedDate);
       for (let i = 1; i <= 12; i++) {
         const date = new Date(originalDate);
         date.setMonth(date.getMonth() + i);
@@ -163,7 +126,7 @@ export default {
       }
     },
     removeEvent(eventId) {
-      const baseEventId = eventId.toString().split('-')[0]; // Convert to string and get the base ID
+      const baseEventId = eventId.toString().split('-')[0];
       for (const key in this.events) {
         if (Object.prototype.hasOwnProperty.call(this.events, key)) {
           this.events[key] = this.events[key].filter(event => !event.id.toString().startsWith(baseEventId));
@@ -173,7 +136,7 @@ export default {
         }
       }
       this.saveEvents();
-      this.updateTotals();
+      this.updateEvents();
     },
     markAsPaid(eventId) {
       for (const key in this.events) {
@@ -186,7 +149,7 @@ export default {
         }
       }
       this.saveEvents();
-      this.updateTotals();
+      this.updateEvents();
     },
     saveEvents() {
       localStorage.setItem('events', JSON.stringify(this.events));
@@ -222,7 +185,6 @@ export default {
           this.events[key].forEach(event => {
             if (event.repeat) {
               const eventDate = new Date(key);
-              // Check if the event should be repeated on the current date
               if (eventDate.getDate() === day && eventDate.getMonth() === month - 1 && eventDate.getFullYear() === year) {
                 const repeatDate = new Date(eventDate);
                 for (let i = 1; i <= 12; i++) {
@@ -241,6 +203,27 @@ export default {
       return events;
     },
     updateTotals() {
+      const firstDayOfMonth = new Date(this.currentWeekStart.getFullYear(), this.currentWeekStart.getMonth(), 1);
+      const lastDayOfMonth = new Date(this.currentWeekStart.getFullYear(), this.currentWeekStart.getMonth() + 1, 0);
+      let totalIn = 0;
+      let totalOut = 0;
+
+      for (let d = new Date(firstDayOfMonth); d <= lastDayOfMonth; d.setDate(d.getDate() + 1)) {
+        const dateString = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+        if (this.events[dateString]) {
+          this.events[dateString].forEach(event => {
+            totalOut += event.amount;
+          });
+        }
+        if (this.isPayday(d)) {
+          totalIn += this.payday.amount;
+        }
+      }
+
+      this.totalIn = totalIn;
+      this.totalOut = totalOut;
+      this.netTotal = totalIn - totalOut;
+
       this.$emit('update-totals', {
         totalIn: this.totalIn,
         totalOut: this.totalOut,
@@ -250,14 +233,20 @@ export default {
     isCurrentDay(date) {
       const today = new Date();
       return date.getDate() === today.getDate() && date.getMonth() === today.getMonth() && date.getFullYear() === today.getFullYear();
+    },
+    isDarkMonth(date) {
+      return date.getMonth() % 2 === 0;
+    },
+    isLightMonth(date) {
+      return date.getMonth() % 2 !== 0;
     }
   },
   watch: {
-    currentMonth() {
+    currentWeekStart() {
       this.updateEvents();
     },
-    currentYear() {
-      this.updateEvents();
+    visibleDays() {
+      this.updateTotals();
     }
   }
 };
@@ -269,10 +258,14 @@ export default {
   display: flex;
   justify-content: center;
   align-items: flex-start;
-  overflow-y: auto;
+  overflow-y: hidden; /* Hide the scrollbar */
   padding: 0 10px;
   background-color: #121212;
   color: #ffffff;
+}
+
+.calendar-container::-webkit-scrollbar {
+  display: none;  /* Chrome, Safari, Opera */
 }
 
 .calendar {
@@ -300,7 +293,6 @@ export default {
   border: 1px solid #333;
   padding: 5px;
   min-height: calc((100vh - 100px) / 6);
-  background-color: #1e1e1e;
   font-size: 0.9rem;
 }
 
@@ -308,10 +300,12 @@ export default {
   background: linear-gradient(135deg, rgba(255,255,255,0.2), rgba(255,255,255,0.1));
 }
 
-.day.prev-month,
-.day.next-month {
+.day.dark-month {
+  background-color: #1e1e1e;
+}
+
+.day.light-month {
   background-color: #2a2a2a;
-  color: #777;
 }
 
 .day-number {
@@ -321,8 +315,7 @@ export default {
   font-size: 0.9rem;
 }
 
-.event
-{
+.event {
   background-color: #00849b;
   color: white;
   padding: 2px 5px;
@@ -359,4 +352,3 @@ export default {
   margin-right: 5px; /* Add spacing to the delete button for consistent look */
 }
 </style>
-
