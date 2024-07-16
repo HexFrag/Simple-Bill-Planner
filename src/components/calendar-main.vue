@@ -7,6 +7,7 @@
       <div v-for="(day, index) in daysInMonth" :key="index" class="day" :class="{ 'prev-month': day.isPrev, 'next-month': day.isNext, 'current-day': isCurrentDay(day.fullDate) }">
         <div v-if="day.date" class="d-flex justify-content-between align-items-start">
           <span class="day-number">{{ day.date }}</span>
+          <span class="remaining-balance">{{ formatCurrency(remainingBalance[`${day.fullDate.getFullYear()}-${day.fullDate.getMonth() + 1}-${day.fullDate.getDate()}`]) }}</span>
           <button class="btn btn-sm btn-success" @click="showEventPopup(day.date, day.isPrev, day.isNext)">+</button>
         </div>
         <div v-if="isPayday(day.fullDate)" class="payday d-flex justify-content-between align-items-center">
@@ -115,6 +116,29 @@ export default {
     },
     netTotal() {
       return this.totalIn - this.totalOut;
+    },
+    remainingBalance() {
+      const balance = {};
+      let currentBalance = this.payday ? this.payday.amount : 0;
+      
+      for (const day of this.daysInMonth) {
+        const dateString = `${day.fullDate.getFullYear()}-${day.fullDate.getMonth() + 1}-${day.fullDate.getDate()}`;
+        
+        // Reset balance on payday
+        if (this.isPayday(day.fullDate)) {
+          currentBalance = this.payday.amount;
+        }
+        
+        if (this.events[dateString]) {
+          for (const event of this.events[dateString]) {
+            currentBalance -= event.amount;
+          }
+        }
+        
+        balance[dateString] = currentBalance;
+      }
+      
+      return balance;
     }
   },
   methods: {
@@ -321,6 +345,11 @@ export default {
   font-size: 0.9rem;
 }
 
+.remaining-balance {
+  font-size: 0.8rem;
+  color: #ffcc00;
+}
+
 .event
 {
   background-color: #00849b;
@@ -357,6 +386,15 @@ export default {
 
 .delete-btn {
   margin-right: 5px; /* Add spacing to the delete button for consistent look */
+}
+
+@media (max-width: 768px) {
+  .calendar {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .day {
+    min-height: calc((100vh - 100px) / 3);
+  }
 }
 </style>
 
