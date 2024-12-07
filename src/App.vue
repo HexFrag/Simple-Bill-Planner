@@ -3,9 +3,15 @@
     <nav class="navbar navbar-dark bg-dark">
       <div class="container-fluid d-flex align-items-center justify-content-between">
         <span class="navbar-brand mb-0 h1">
-          Bill Payment Planner - Week of {{ formatDate(currentWeekStart) }}
+          Bill Payment Planner - {{ currentMonthName }} {{ currentYear }}
         </span>
         <div class="d-flex align-items-center flex-grow-1 justify-content-center">
+          <div class="mx-4 text-center">
+            <strong>Balance:</strong> {{ formatCurrency(balance) }}
+          </div>
+          <div class="mx-4 text-center">
+            <strong>Available:</strong> {{ formatCurrency(available) }}
+          </div>
           <div class="mx-4 text-center">
             <strong>In:</strong> {{ formatCurrency(totalIn) }}
           </div>
@@ -16,86 +22,175 @@
             <strong>Net:</strong> {{ formatCurrency(netTotal) }}
           </div>
         </div>
-        <button class="btn btn-secondary btn-sm" @click="goToToday">Today</button>
+        <div class="btn-group">
+          <button class="btn btn-secondary btn-sm" @click="previousMonth">&lt; Prev</button>
+          <button class="btn btn-secondary btn-sm" @click="nextMonth">Next &gt;</button>
+        </div>
       </div>
     </nav>
-    <div class="calendar-wrapper" @wheel="handleScroll">
+    <div class="calendar-wrapper">
       <CalendarMain
         ref="calendarMain"
-        :currentWeekStart="currentWeekStart"
+        :currentMonth="currentMonth"
+        :currentYear="currentYear"
+        :events="events"
         @update-totals="updateTotals"
       />
     </div>
+    <PlaidLinkButton @transactions="handleTransactions" />
   </div>
 </template>
 
 <script>
+
 import CalendarMain from './components/calendar-main.vue';
+import PlaidLinkButton from './components/PlaidLinkButton.vue';
 
 export default {
   name: 'App',
   components: {
-    CalendarMain
+    CalendarMain,
+    PlaidLinkButton,
   },
   data() {
     return {
-      today: new Date(),
+      currentYear: new Date().getFullYear(),
+      currentMonth: new Date().getMonth(),
       totalIn: 0,
       totalOut: 0,
       netTotal: 0,
-      accumulatedScroll: 0,
-      scrollThreshold: 100, // Adjust this value to control sensitivity
-      weekOffset: 0, // New property to keep track of week offset
-      startWeek: this.getStartOfWeek(new Date()) // Start from the current week
+      balance: 0,
+      available: 0,
+      events: {},
+      allAccounts: [],
     };
   },
   computed: {
-    currentWeekStart() {
-      const date = new Date(this.startWeek);
-      date.setDate(this.startWeek.getDate() + this.weekOffset * 7);
-      return date;
-    }
+    currentMonthName() {
+      const monthNames = [
+        'January',
+        'February',
+        'March',
+        'April',
+        'May',
+        'June',
+        'July',
+        'August',
+        'September',
+        'October',
+        'November',
+        'December',
+      ];
+      return monthNames[this.currentMonth];
+    },
   },
   methods: {
-    getStartOfWeek(date) {
-      const day = date.getDay();
-      const diff = date.getDate() - day + (day === 0 ? -6 : 1); // Adjust when day is Sunday
-      return new Date(date.setDate(diff));
-    },
-    goToToday() {
-      this.weekOffset = 0;
-      this.startWeek = this.getStartOfWeek(new Date());
-    },
-    formatCurrency(amount) {
-      return `$${amount ? amount.toFixed(2) : '0.00'}`;
-    },
-    formatDate(date) {
-      if (!date) return '';
-      return new Date(date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-    },
-    updateTotals(totals) {
-      this.totalIn = totals.totalIn || 0;
-      this.totalOut = totals.totalOut || 0;
-      this.netTotal = totals.netTotal || 0;
-    },
-    handleScroll(event) {
-      this.accumulatedScroll += event.deltaY;
-
-      if (this.accumulatedScroll >= this.scrollThreshold) {
-        this.nextWeek();
-        this.accumulatedScroll = 0;
-      } else if (this.accumulatedScroll <= -this.scrollThreshold) {
-        this.previousWeek();
-        this.accumulatedScroll = 0;
+    previousMonth() {
+      if (this.currentMonth === 0) {
+        this.currentMonth = 11;
+        this.currentYear--;
+      } else {
+        this.currentMonth--;
       }
     },
-    previousWeek() {
-      this.weekOffset -= 1;
+    nextMonth() {
+      if (this.currentMonth === 11) {
+        this.currentMonth = 0;
+        this.currentYear++;
+      } else {
+        this.currentMonth++;
+      }
     },
-    nextWeek() {
-      this.weekOffset += 1;
-    }
-  }
+    formatCurrency(amount) {
+      return `$${amount.toFixed(2)}`;
+    },
+    updateTotals(totals) {
+      this.totalIn = totals.totalIn;
+      this.totalOut = totals.totalOut;
+      this.netTotal = totals.netTotal;
+    },
+    handleTransactions(data) {
+      console.log('Transactions:', data);
+      
+      this.organizeAccounts(data.accounts);
+      if(this.allAccounts['depository'])
+      {
+        let checkingAccounts = this.allAccounts['depository']['checking'];
+        if(checkingAccounts.length > 0)
+        {
+            let totals = checkingAccounts.reduce((totals, account) => {
+              totals.currentTotal += account.balances.current || 0;
+              totals.availableTotal += account.balances.available || 0;
+              return totals;
+            }, { currentTotal: 0, availableTotal: 0 });
+
+            this.balance = totals.currentTotal;
+            this.available = totals.availableTotal;
+
+        }
+      }
+
+      this.processTransactions(data.transactions);
+
+    },
+    organizeAccounts(accounts)
+    {
+      this.allAccounts = accounts.reduce((acc, account) => {
+        const { type, subtype } = account;
+        if(!acc[type]) acc[type] = {};
+        if(!acc[type][subtype]) acc[type][subtype] = []
+        acc[type][subtype].push(account);
+        return acc;
+      }, {});
+    },
+    processTransactions(transactions)
+    {
+      const recurringMap = {};
+      transactions.forEach(transaction => {
+        if(transaction.amount > 0)
+        {
+          this.addEvent(transaction.name, transaction.amount, transaction.date, true);
+        }
+        else if(transaction.amount < 0)
+        {
+          const key = '${transaction.name}:${transaction.date}';
+          if(!recurringMap[key]){
+            recurringMap[key] = []
+          }
+          recurringMap[key].push(transaction);
+        }
+        
+      });
+
+      for(const key in recurringMap)
+      {
+        if(recurringMap[key].length > 1)
+        {
+          const transaction = recurringMap[key][0];
+          this.setPayday(transaction.date, transaction.amount);
+          break;
+        }        
+      }
+
+
+    },
+    addEvent(name, value, date, recurring = true) {
+      let _date = new Date(date);
+      this.$refs.calendarMain.addEvent({
+        name,
+        amount: value,
+        date: _date,
+        repeat: recurring,
+      });
+    },
+    setPayday(date, amount) {
+      let _amt = Math.abs(amount);
+      this.$refs.calendarMain.setPayday({
+        date,
+        amount: _amt,
+      });
+    },
+  },
 };
 </script>
 
@@ -129,15 +224,13 @@ export default {
   flex-grow: 1;
 }
 
-.calendar-wrapper {
-  flex: 1;
-  overflow-y: hidden; /* Hide the scrollbar */
-  -ms-overflow-style: none;  /* IE and Edge */
-  scrollbar-width: none;  /* Firefox */
+.btn-group {
+  margin-left: auto;
 }
 
-.calendar-wrapper::-webkit-scrollbar {
-  display: none;  /* Chrome, Safari, Opera */
+.calendar-wrapper {
+  flex: 1;
+  overflow-y: auto;
 }
 
 .calendar-container {
